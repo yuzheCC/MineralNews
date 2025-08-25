@@ -4,6 +4,38 @@ import json
 from datetime import datetime, timedelta
 import pandas as pd
 from openai import OpenAI
+import re
+from urllib.parse import urlparse
+
+# 简单的链接验证函数
+def validate_url(url):
+    """验证URL是否有效"""
+    if not url or url.strip() == "":
+        return False, "空链接"
+    
+    # 检查URL格式
+    try:
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            return False, "无效的URL格式"
+    except:
+        return False, "URL解析失败"
+    
+    # 检查是否是常见的无效链接模式
+    invalid_patterns = [
+        r'example\.com',
+        r'placeholder\.com',
+        r'test\.com',
+        r'sample\.com',
+        r'news\.cnstock\.com.*202508',  # 您提到的无效链接模式
+        r'www\.cs\.com\.cn.*202508'     # 您提到的无效链接模式
+    ]
+    
+    for pattern in invalid_patterns:
+        if re.search(pattern, url, re.IGNORECASE):
+            return False, "无效链接模式"
+    
+    return True, "链接格式有效"
 
 # 国际化配置
 LANGUAGES = {
@@ -48,7 +80,7 @@ LANGUAGES = {
         "api_key_expired": "❌ API key expired, please update your Kimi API key",
         "api_quota_exceeded": "❌ API quota exceeded, please check your account balance",
         "api_error": "❌ API call error",
-        "news_prompt_template": "Please help me find the LATEST and MOST RECENT news about the following keywords and companies in {time_range}:\n\nKeywords: {keywords}\nCompanies: {companies}\n\nCRITICAL TIME REQUIREMENTS:\n1. The time range '{time_range}' refers to the CURRENT DATE and time - NOT historical dates from previous years\n2. If the prompt mentions 'last 24 hours', 'last 2 weeks', etc., calculate this from TODAY'S DATE, not from 2024 or any other past year\n3. ONLY provide news that was published or occurred within the specified time range from TODAY\n4. If no recent news exists in the specified time range, clearly state 'No recent news found in {time_range} (calculated from current date)' instead of providing old information\n5. NEVER reference dates from 2024, 2023, or any previous years unless they are specifically relevant to current developments\n\nPlease provide:\n1. Title, source, and publication time for each news item\n2. Relevance score (0-1, 1 being most relevant) for each news item with selected keywords and companies\n3. News summary\n4. News complete content\n5. Sorted by relevance and recency\n\nPlease answer in English with clear formatting and ensure ALL news is from the specified time period calculated from TODAY'S DATE."
+        "news_prompt_template": "Please help me find the LATEST and MOST RECENT news about the following keywords and companies in {time_range}:\n\nKeywords: {keywords}\nCompanies: {companies}\n\nCRITICAL TIME REQUIREMENTS:\n1. The time range '{time_range}' refers to the CURRENT DATE and time - NOT historical dates from previous years\n2. If the prompt mentions 'last 24 hours', 'last 2 weeks', etc., calculate this from TODAY'S DATE, not from 2024 or any other past year\n3. ONLY provide news that was published or occurred within the specified time range from TODAY\n4. If no recent news exists in the specified time range, clearly state 'No recent news found in {time_range} (calculated from current date)' instead of providing old information\n5. NEVER reference dates from 2024, 2023, or any previous years unless they are specifically relevant to current developments\n\nPlease provide:\n1. Title, source, and publication time for each news item\n2. Relevance score (0-1, 1 being most relevant) for each news item with selected keywords and companies\n3. Source Link: URL link to the original news article (must be real and accessible)\n4. News summary\n5. News complete content\n6. Sorted by relevance and recency\n\nPlease answer in English with clear formatting and ensure ALL news is from the specified time period calculated from TODAY'S DATE."
     },
     "zh": {
         "title": "🔍 关键矿产新闻分析系统",
@@ -91,7 +123,7 @@ LANGUAGES = {
         "api_key_expired": "❌ API密钥已过期，请更新您的Kimi API密钥",
         "api_quota_exceeded": "❌ API配额已用完，请检查您的账户余额",
         "api_error": "❌ API调用错误",
-        "news_prompt_template": "请帮我查找{time_range}关于以下关键词和公司的最新新闻：\n\n关键词：{keywords}\n公司：{companies}\n\n关键时间要求：\n1. 时间范围'{time_range}'指的是当前日期和时间 - 不是之前年份的历史日期\n2. 如果提示中提到'最近24小时'、'最近2周'等，请从今天的日期开始计算，而不是从2024年或任何其他过去的年份\n3. 只提供在指定时间范围内（从今天开始计算）发布或发生的新闻\n4. 如果在指定时间范围内没有最新新闻，请明确说明'在{time_range}内未找到最新新闻（从当前日期计算）'，而不是提供旧信息\n5. 除非与当前发展特别相关，否则永远不要引用2024年、2023年或任何之前年份的日期\n\n请提供：\n1. 每条新闻的标题、来源、发布时间\n2. 每条新闻与选中关键词和公司的相关性评分（0-1，1表示最相关）\n3. 新闻摘要\n4. 新闻完整内容\n5. 按相关性和时效性排序\n\n请用中文回答，格式要清晰易读，确保所有新闻都来自从当前日期开始计算的指定时间段。"
+        "news_prompt_template": "请帮我查找{time_range}关于以下关键词和公司的最新新闻：\n\n关键词：{keywords}\n公司：{companies}\n\n关键时间要求：\n1. 时间范围'{time_range}'指的是当前日期和时间 - 不是之前年份的历史日期\n2. 如果提示中提到'最近24小时'、'最近2周'等，请从今天的日期开始计算，而不是从2024年或任何其他过去的年份\n3. 只提供在指定时间范围内（从今天开始计算）发布或发生的新闻\n4. 如果在指定时间范围内没有最新新闻，请明确说明'在{time_range}内未找到最新新闻（从当前日期计算）'，而不是提供旧信息\n5. 除非与当前发展特别相关，否则永远不要引用2024年、2023年或任何之前年份的日期\n\n请提供：\n1. 每条新闻的标题、来源、发布时间\n2. 每条新闻与选中关键词和公司的相关性评分（0-1，1表示最相关）\n3. 来源链接：原始新闻文章的URL链接（必须是真实可访问的链接）\n4. 新闻摘要\n5. 新闻完整内容\n6. 按相关性和时效性排序\n\n请用中文回答，格式要清晰易读，确保所有新闻都来自从当前日期开始计算的指定时间段。"
     }
 }
 
@@ -390,13 +422,14 @@ def generate_news_prompt(selected_keywords, selected_companies, time_option, cus
 {keywords_display}
 {companies_display}
 
-Please provide news analysis with the following 6 fields for each news item:
+Please provide news analysis with the following 7 fields for each news item:
 1. Title: Complete news title
 2. Relevance: Relevance score (0-1, 1 being most relevant)
 3. Source: News source (must be from China)
-4. Publish Time: Specific publication time (YYYY-MM-DD HH:MM)
-5. Summary: Brief overview (100-200 words)
-6. Full Text: Complete news content
+4. Source Link: URL link to the original news article (must be real and accessible)
+5. Publish Time: Specific publication time (YYYY-MM-DD HH:MM)
+6. Summary: Brief overview (100-200 words)
+7. Full Text: Complete news content
 
 Format each field on a separate line with blank lines between fields for readability."""
     else:
@@ -412,13 +445,14 @@ Format each field on a separate line with blank lines between fields for readabi
 {keywords_display}
 {companies_display}
 
-请提供新闻分析，每条新闻包含以下6个字段：
+请提供新闻分析，每条新闻包含以下7个字段：
 1. 标题：新闻的完整标题
 2. 相关性：相关性评分（0-1，1为最相关）
 3. 来源：新闻来源（必须来自中国）
-4. 发布时间：具体发布时间（年-月-日 时:分）
-5. 摘要：简要概述（100-200字）
-6. 全文：新闻完整内容
+4. 来源链接：原始新闻文章的URL链接（必须是真实可访问的链接）
+5. 发布时间：具体发布时间（年-月-日 时:分）
+6. 摘要：简要概述（100-200字）
+7. 全文：新闻完整内容
 
 每个字段单独占一行，字段之间用空行分隔，确保格式清晰易读。"""
     
@@ -431,7 +465,7 @@ def generate_language_conversion_prompt(news_content, target_language):
 
 ⚠️ CRITICAL REQUIREMENTS:
 - Convert ALL Chinese text to English
-- Keep the exact same 6-field format: Title, Relevance, Source, Publish Time, Summary, Full Text
+- Keep the exact same 7-field format: Title, Relevance, Source, Source Link, Publish Time, Summary, Full Text
 - Maintain red bold formatting for field labels: <span style="color: #ff0000; font-weight: bold;">**Field Name**</span>
 - Keep the same line breaks and spacing between fields
 - Preserve all news content and relevance scores
@@ -446,7 +480,7 @@ Please provide the English version with the exact same format and structure."""
 
 ⚠️ 重要要求：
 - 将所有英文文本转换为中文
-- 保持完全相同的6字段格式：标题、相关性、来源、发布时间、摘要、全文
+- 保持完全相同的7字段格式：标题、相关性、来源、来源链接、发布时间、摘要、全文
 - 保持字段标签的红色加粗格式：<span style="color: #ff0000; font-weight: bold;">**字段名**</span>
 - 保持相同的换行和字段间间距
 - 保留所有新闻内容和相关性评分
@@ -492,17 +526,24 @@ def call_kimi_api(prompt, model="kimi-k2-turbo-preview"):
 - 请尽可能找到指定时间范围内的真实新闻
 
 ⚠️ 重要输出格式要求：
-每条新闻必须严格按照以下6项固定格式输出，不能缺少任何一项：
+每条新闻必须严格按照以下7项固定格式输出，不能缺少任何一项：
 
 1. **Title（标题）**：新闻的完整标题
 2. **Relevance（相关性）**：相关性评分（0-1，1为最相关）
 3. **Source（来源）**：新闻来源必须来自中国（中国媒体、网站、机构等）
-4. **Publish Time（发布时间）**：新闻发布的具体时间（年-月-日 时:分）
-5. **Summary（摘要）**：新闻的简要概述（100-200字）
-6. **Full Text（全文）**：新闻的完整内容
+4. **Source Link（来源链接）**：原始新闻文章的URL链接（必须是真实可访问的链接）
+5. **Publish Time（发布时间）**：新闻发布的具体时间（年-月-日 时:分）
+6. **Summary（摘要）**：新闻的简要概述（100-200字）
+7. **Full Text（全文）**：新闻的完整内容
 
 ⚠️ 字段标签显示要求：
-所有字段标签（Title、Relevance、Source、Publish Time、Summary、Full Text）必须使用红色加粗字体显示，格式为：<span style="color: #ff0000; font-weight: bold;">**字段名** ： </span>
+所有字段标签（Title、Relevance、Source、Source Link、Publish Time、Summary、Full Text）必须使用红色加粗字体显示，格式为：<span style="color: #ff0000; font-weight: bold;">**字段名** ： </span>
+
+⚠️ Source Link 特殊要求：
+- 必须提供真实可访问的新闻链接
+- 链接格式应该是标准的HTTP/HTTPS URL
+- 如果无法提供真实链接，请使用"链接暂不可用"或"Link not available"
+- 避免生成虚构的URL或示例链接
 
 ⚠️ 格式要求：
 每个字段必须单独占一行，字段之间必须有空行分隔，确保格式清晰易读。
@@ -515,7 +556,12 @@ def call_kimi_api(prompt, model="kimi-k2-turbo-preview"):
 - **重要**：所有新闻来源必须来自中国（中国媒体、网站、机构等）
 - 如果确实没有找到相关新闻，请说明"在指定时间范围内未找到相关新闻"
 
-请用中文回答，严格按照上述6项固定格式输出每条新闻。"""
+⚠️ 链接质量要求：
+- 优先提供来自知名中国媒体的真实新闻链接
+- 确保链接格式正确且可访问
+- 如果无法验证链接真实性，请明确标注"链接需要验证"
+
+请用中文回答，严格按照上述7项固定格式输出每条新闻。"""
         else:
             system_prompt = f"""You are Kimi, an AI assistant provided by Moonshot AI. You are better at Chinese and English conversations. You will provide users with safe, helpful, and accurate answers. At the same time, you will refuse to answer any questions involving terrorism, racial discrimination, pornography, violence, etc. Moonshot AI is a proper noun and cannot be translated into other languages.
 
@@ -532,17 +578,24 @@ You are a professional news search and analysis expert, skilled in:
 - Please try to find real news within the specified time range
 
 ⚠️ Important Output Format Requirements:
-Each news item must strictly follow the following 6 fixed format items, without missing any:
+Each news item must strictly follow the following 7 fixed format items, without missing any:
 
 1. **Title**: Complete news title
 2. **Relevance**: Relevance score (0-1, 1 being most relevant)
 3. **Source**: News source must be from China (Chinese media, websites, institutions, etc.)
-4. **Publish Time**: Specific publication time (YYYY-MM-DD HH:MM)
-5. **Summary**: Brief overview (100-200 words)
-6. **Full Text**: Complete news content
+4. **Source Link**: URL link to the original news article (must be real and accessible, format like: https://www.example.com/news/2024/01/01/article.html)
+5. **Publish Time**: Specific publication time (YYYY-MM-DD HH:MM)
+6. **Summary**: Brief overview (100-200 words)
+7. **Full Text**: Complete news content
 
 ⚠️ Field Label Display Requirements:
-All field labels (Title, Relevance, Source, Publish Time, Summary, Full Text) must use red bold font, formatted as: <span style="color: #ff0000; font-weight: bold;">**Field Name** ：</span>
+All field labels (Title, Relevance, Source, Source Link, Publish Time, Summary, Full Text) must use red bold font, formatted as: <span style="color: #ff0000; font-weight: bold;">**Field Name** ：</span>
+
+⚠️ Source Link Special Requirements:
+- Must provide real and accessible news links
+- Link format should be standard HTTP/HTTPS URL
+- If unable to provide real links, use "Link not available" or "链接暂不可用"
+- Avoid generating fictional URLs or example links
 
 ⚠️ Format Requirements:
 Each field must be on a separate line, with blank lines between fields to ensure clear and readable formatting.
@@ -555,7 +608,12 @@ Search Strategy:
 - **Important**: All news sources must be from China (Chinese media, websites, institutions, etc.)
 - If no relevant news is found, please state "No relevant news found in the specified time range"
 
-Please answer in English, strictly following the above 6 fixed format items for each news item."""
+⚠️ Link Quality Requirements:
+- Prioritize providing real news links from well-known Chinese media
+- Ensure link format is correct and accessible
+- If unable to verify link authenticity, clearly mark as "Link needs verification"
+
+Please answer in English, strictly following the above 7 fixed format items for each news item."""
         
         # 调用API
         completion = client.chat.completions.create(
