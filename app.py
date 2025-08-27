@@ -308,7 +308,7 @@ def get_localized_options():
 
 # Kimi API 配置 (根据官方示例)
 # 注意：请将此处替换为您从 Kimi 开放平台申请的 API Key
-KIMI_API_KEY = "sk-U2CvNM0g5AuNJEXMeHTvR6LwsirowzUvJuV5uMVnvGUT8Qgw"
+KIMI_API_KEY = "sk-wkpkVs2LmR7menRJAabHK4te2f9QMqdIDroIsW8uw58CSUNE"
 KIMI_BASE_URL = "https://api.moonshot.cn/v1"
 
 # 预定义数据
