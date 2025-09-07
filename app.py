@@ -6,6 +6,9 @@ import pandas as pd
 from openai import OpenAI
 import re
 from urllib.parse import urlparse
+from serpapi import GoogleSearch
+from bs4 import BeautifulSoup
+import time
 
 # 简单的链接验证函数
 def validate_url(url):
@@ -36,6 +39,61 @@ def validate_url(url):
             return False, "无效链接模式"
     
     return True, "链接格式有效"
+
+def process_and_validate_result(result):
+    """后处理验证API返回结果中的链接"""
+    if not result or result.startswith("❌"):
+        return result
+    
+    # 检查是否包含明显的虚假链接模式
+    fake_patterns = [
+        r'content_\d{6,}\.html?',  # content_123456.html
+        r'/\d{10,}\.html?',        # /1234567890.html
+        r'0{8,}',                  # 连续8个或更多零
+        r'content_\d+\.htm',       # content_数字.htm
+        r'/202\d{1}/\d{8,}\.html', # /2025/12345678.html
+    ]
+    
+    contains_fake_link = False
+    for pattern in fake_patterns:
+        if re.search(pattern, result):
+            contains_fake_link = True
+            break
+    
+    if contains_fake_link:
+        # 如果检测到虚假链接，替换为警告信息
+        warning_msg = """
+⚠️ 检测到可能的虚假链接，系统无法提供真实可访问的新闻链接。
+
+可能的原因：
+1. 联网搜索功能未正常工作
+2. 搜索结果中没有包含有效的新闻链接
+3. 当前时间范围内缺少相关新闻
+
+建议：
+- 尝试调整关键词或时间范围
+- 稍后重试搜索
+- 联系技术支持检查联网搜索功能
+        """
+        
+        if st.session_state.language == "en":
+            warning_msg = """
+⚠️ Detected potentially fake links. The system cannot provide real accessible news links.
+
+Possible reasons:
+1. Web search functionality not working properly
+2. Search results contain no valid news links
+3. Lack of relevant news in current time range
+
+Suggestions:
+- Try adjusting keywords or time range
+- Retry search later
+- Contact technical support to check web search functionality
+            """
+        
+        return warning_msg
+    
+    return result
 
 # 国际化配置
 LANGUAGES = {
@@ -69,7 +127,7 @@ LANGUAGES = {
         "edit_selected_prompt": "Edit Selected Prompt",
         "input_prompt": "Input Your Prompt",
         "prompt_placeholder": "Enter your prompt here...",
-        "help_text": "Select Kimi model version",
+        "help_text": "Select DeepSeek model version",
         "error_no_keywords": "Please select at least one keyword!",
         "error_no_companies": "Please select at least one company!",
         "error_no_prompt": "Please enter prompt content!",
@@ -77,7 +135,7 @@ LANGUAGES = {
         "step1_analyzing": "🔍 Step 1: Analyzing custom prompt...",
         "step2_converting": "🔄 Step 2: Converting output language according to UI language setting...",
         "language_conversion_prompt": "🔄 Language Conversion Prompt",
-        "api_key_expired": "❌ API key expired, please update your Kimi API key",
+        "api_key_expired": "❌ API key expired, please update your DeepSeek API key",
         "api_quota_exceeded": "❌ API quota exceeded, please check your account balance",
         "api_error": "❌ API call error",
         "news_prompt_template": "Please help me find the LATEST and MOST RECENT news about the following keywords and companies in {time_range}:\n\nKeywords: {keywords}\nCompanies: {companies}\n\nCRITICAL TIME REQUIREMENTS:\n1. The time range '{time_range}' refers to the CURRENT DATE and time - NOT historical dates from previous years\n2. If the prompt mentions 'last 24 hours', 'last 2 weeks', etc., calculate this from TODAY'S DATE, not from 2024 or any other past year\n3. ONLY provide news that was published or occurred within the specified time range from TODAY\n4. If no recent news exists in the specified time range, clearly state 'No recent news found in {time_range} (calculated from current date)' instead of providing old information\n5. NEVER reference dates from 2024, 2023, or any previous years unless they are specifically relevant to current developments\n\nPlease provide:\n1. Title, source, and publication time for each news item\n2. Relevance score (0-1, 1 being most relevant) for each news item with selected keywords and companies\n3. Source Link: URL link to the original news article (must be real and accessible)\n4. News summary\n5. News complete content\n6. Sorted by relevance and recency\n\nPlease answer in English with clear formatting and ensure ALL news is from the specified time period calculated from TODAY'S DATE."
@@ -112,7 +170,7 @@ LANGUAGES = {
         "edit_selected_prompt": "编辑选中的Prompt",
         "input_prompt": "输入您的Prompt",
         "prompt_placeholder": "请输入您想要分析的Prompt...",
-        "help_text": "选择Kimi模型版本",
+        "help_text": "选择DeepSeek模型版本",
         "error_no_keywords": "请至少选择一个关键词！",
         "error_no_companies": "请至少选择一个公司！",
         "error_no_prompt": "请输入Prompt内容！",
@@ -120,7 +178,7 @@ LANGUAGES = {
         "step1_analyzing": "🔍 第一步：正在分析自定义Prompt...",
         "step2_converting": "🔄 第二步：正在根据界面语言要求转换输出语言...",
         "language_conversion_prompt": "🔄 语言转换Prompt",
-        "api_key_expired": "❌ API密钥已过期，请更新您的Kimi API密钥",
+        "api_key_expired": "❌ API密钥已过期，请更新您的DeepSeek API密钥",
         "api_quota_exceeded": "❌ API配额已用完，请检查您的账户余额",
         "api_error": "❌ API调用错误",
         "news_prompt_template": "请帮我查找{time_range}关于以下关键词和公司的最新新闻：\n\n关键词：{keywords}\n公司：{companies}\n\n关键时间要求：\n1. 时间范围'{time_range}'指的是当前日期和时间 - 不是之前年份的历史日期\n2. 如果提示中提到'最近24小时'、'最近2周'等，请从今天的日期开始计算，而不是从2024年或任何其他过去的年份\n3. 只提供在指定时间范围内（从今天开始计算）发布或发生的新闻\n4. 如果在指定时间范围内没有最新新闻，请明确说明'在{time_range}内未找到最新新闻（从当前日期计算）'，而不是提供旧信息\n5. 除非与当前发展特别相关，否则永远不要引用2024年、2023年或任何之前年份的日期\n\n请提供：\n1. 每条新闻的标题、来源、发布时间\n2. 每条新闻与选中关键词和公司的相关性评分（0-1，1表示最相关）\n3. 来源链接：原始新闻文章的URL链接（必须是真实可访问的链接）\n4. 新闻摘要\n5. 新闻完整内容\n6. 按相关性和时效性排序\n\n请用中文回答，格式要清晰易读，确保所有新闻都来自从当前日期开始计算的指定时间段。"
@@ -306,10 +364,11 @@ def get_localized_options():
         "time_options": LANGUAGES[current_lang]["time_options"]
     }
 
-# Kimi API 配置 (根据官方示例)
-# 注意：请将此处替换为您从 Kimi 开放平台申请的 API Key
-KIMI_API_KEY = "sk-wkpkVs2LmR7menRJAabHK4te2f9QMqdIDroIsW8uw58CSUNE"
-KIMI_BASE_URL = "https://api.moonshot.cn/v1"
+# SerpApi 配置
+SERPAPI_API_KEY = "fa36203c180ccb3c6b40e432168e491c92ac4c74b53aeac9068a5e61bbf77f05"  # 请替换为您的SerpApi密钥
+
+# OpenAI API 配置
+OPENAI_API_KEY = "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"
 
 # 预定义数据
 KEYWORDS = [
@@ -351,7 +410,7 @@ TIME_OPTIONS = {
 }
 
 def generate_news_prompt(selected_keywords, selected_companies, time_option, custom_start_date=None, custom_end_date=None):
-    """生成新闻搜索Prompt - 第一步：获取新闻内容"""
+    """生成搜索参数描述（用于显示）"""
     current_date = datetime.now()
     
     # 构建关键词显示
@@ -398,7 +457,7 @@ def generate_news_prompt(selected_keywords, selected_companies, time_option, cus
     else:
         time_str = "recent time period" if st.session_state.language == "en" else "最近时间段"
     
-    # 构建搜索范围
+    # 构建搜索范围描述
     if selected_keywords and selected_companies:
         search_scope = f"news about {keywords_display} or {companies_display}" if st.session_state.language == "en" else f"关于{keywords_display}或{companies_display}的新闻"
     elif selected_keywords:
@@ -408,53 +467,45 @@ def generate_news_prompt(selected_keywords, selected_companies, time_option, cus
     else:
         search_scope = "news" if st.session_state.language == "en" else "新闻"
     
-    # 第一步：简化的新闻搜索Prompt
+    # 生成搜索参数描述
     if st.session_state.language == "en":
-        prompt = f"""Please help me find {search_scope} in {time_str}.
-
-⚠️ Important Requirements:
-- Current date is {current_date.strftime('%Y-%m-%d')}
-- Time range: {time_str}
-- All news sources must be from China (Chinese media, websites, institutions, etc.)
-- Use "OR" logic: news content is relevant if it matches ANY keyword OR ANY company
-- If no news found in specified time range, expand search appropriately
+        prompt = f"""Search Parameters:
+- Search Scope: {search_scope}
+- Time Range: {time_str}
+- Current Date: {current_date.strftime('%Y-%m-%d')}
+- Search Engine: Baidu News (via SerpApi) → OpenAI Formatting
+- Logic: OR (news content is relevant if it matches ANY keyword OR ANY company)
 
 {keywords_display}
 {companies_display}
 
-Please provide news analysis with the following 7 fields for each news item:
+The system will: 1) Search for real news articles via SerpApi, 2) Format output with OpenAI using the following 7 fields for each news item:
 1. Title: Complete news title
 2. Relevance: Relevance score (0-1, 1 being most relevant)
-3. Source: News source (must be from China)
-4. Source Link: URL link to the original news article (must be real and accessible)
+3. Source: News source (from Chinese media)
+4. Source Link: URL link to the original news article (real and accessible)
 5. Publish Time: Specific publication time (YYYY-MM-DD HH:MM)
 6. Summary: Brief overview (100-200 words)
-7. Full Text: Complete news content
-
-Format each field on a separate line with blank lines between fields for readability."""
+7. Full Text: Complete news content"""
     else:
-        prompt = f"""请帮我查找{time_str}{search_scope}。
-
-⚠️ 重要要求：
-- 当前日期是 {current_date.strftime('%Y年%m月%d日')}
+        prompt = f"""搜索参数：
+- 搜索范围：{search_scope}
 - 时间范围：{time_str}
-- 所有新闻来源必须来自中国（中国媒体、网站、机构等）
-- 使用"或"逻辑：新闻内容与任一关键词或任一公司相关即可
-- 如果指定时间范围内没有找到新闻，可以适当扩大搜索范围
+- 当前日期：{current_date.strftime('%Y年%m月%d日')}
+- 搜索引擎：百度新闻（通过SerpApi）→ OpenAI格式化
+- 逻辑：或（新闻内容与任一关键词或任一公司相关即可）
 
 {keywords_display}
 {companies_display}
 
-请提供新闻分析，每条新闻包含以下7个字段：
+系统将：1）通过SerpApi搜索真实新闻文章，2）使用OpenAI格式化输出，为每条新闻提供以下7个字段的分析：
 1. 标题：新闻的完整标题
 2. 相关性：相关性评分（0-1，1为最相关）
-3. 来源：新闻来源（必须来自中国）
-4. 来源链接：原始新闻文章的URL链接（必须是真实可访问的链接）
+3. 来源：新闻来源（来自中国媒体）
+4. 来源链接：原始新闻文章的URL链接（真实可访问）
 5. 发布时间：具体发布时间（年-月-日 时:分）
 6. 摘要：简要概述（100-200字）
-7. 全文：新闻完整内容
-
-每个字段单独占一行，字段之间用空行分隔，确保格式清晰易读。"""
+7. 全文：新闻完整内容"""
     
     return prompt
 
@@ -493,137 +544,365 @@ Please provide the English version with the exact same format and structure."""
     
     return prompt
 
-def call_kimi_api(prompt, model="kimi-k2-turbo-preview"):
-    """调用Kimi API (使用官方OpenAI客户端)"""
+def search_baidu_news(keywords, companies, time_option, custom_start_date=None, custom_end_date=None):
+    """使用SerpApi搜索百度新闻（第一步）"""
+    try:
+        # 构建搜索查询
+        search_terms = []
+        
+        # 添加关键词
+        if keywords:
+            search_terms.extend(keywords)
+        
+        # 添加公司名称
+        if companies:
+            # 获取当前语言的公司映射
+            current_companies_mapping = COMPANIES_MAPPING[st.session_state.language]
+            for company in companies:
+                if company in current_companies_mapping:
+                    # 使用预定义公司的中文名称进行搜索
+                    search_terms.append(current_companies_mapping[company])
+                else:
+                    # 使用自定义公司名称
+                    search_terms.append(company)
+        
+        # 构建搜索查询字符串
+        query = " OR ".join(search_terms) if search_terms else "关键矿产"
+        
+        # 添加时间范围限制
+        current_date = datetime.now()
+        if time_option == "2_weeks":
+            start_date = current_date - timedelta(weeks=2)
+            date_range = f" {start_date.strftime('%Y年%m月%d日')}..{current_date.strftime('%Y年%m月%d日')}"
+        elif time_option == "2_days":
+            start_date = current_date - timedelta(days=2)
+            date_range = f" {start_date.strftime('%Y年%m月%d日')}..{current_date.strftime('%Y年%m月%d日')}"
+        elif time_option == "custom" and custom_start_date and custom_end_date:
+            date_range = f" {custom_start_date.strftime('%Y年%m月%d日')}..{custom_end_date.strftime('%Y年%m月%d日')}"
+        else:
+            date_range = ""
+        
+        # 最终搜索查询
+        final_query = query + date_range
+        
+        # 使用SerpApi搜索百度新闻
+        search = GoogleSearch({
+            "engine": "baidu_news",
+            "q": final_query,
+            "api_key": SERPAPI_API_KEY,
+            "medium":1,
+            "rtt":4,
+            "num": 8  # 获取前8条结果
+        })
+        
+        results = search.get_dict()
+        
+        # 处理搜索结果
+        if "organic_results" in results and results["organic_results"]:
+            return results["organic_results"]  # 返回原始搜索结果
+        else:
+            return None  # 返回None表示未找到结果
+            
+    except Exception as e:
+        raise Exception(f"搜索失败: {str(e)}")
+
+def scrape_web_content(url, max_retries=3):
+    """抓取网页内容"""
+    try:
+        # 设置请求头，模拟浏览器访问
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+        }
+        
+        for attempt in range(max_retries):
+            try:
+                # 发送请求
+                response = requests.get(url, headers=headers, timeout=10)
+                response.raise_for_status()
+                
+                # 检查响应内容类型
+                content_type = response.headers.get('content-type', '').lower()
+                if 'text/html' not in content_type:
+                    return f"❌ 无法获取HTML内容，内容类型: {content_type}"
+                
+                # 解析HTML
+                soup = BeautifulSoup(response.content, 'lxml')
+                
+                # 移除脚本和样式标签
+                for script in soup(["script", "style", "nav", "footer", "header", "aside"]):
+                    script.decompose()
+                
+                # 尝试多种选择器来找到主要内容
+                content_selectors = [
+                    'article',
+                    '.article-content',
+                    '.content',
+                    '.news-content',
+                    '.post-content',
+                    '.entry-content',
+                    'main',
+                    '.main-content',
+                    '#content',
+                    '.article-body',
+                    '.news-body'
+                ]
+                
+                content_text = ""
+                for selector in content_selectors:
+                    elements = soup.select(selector)
+                    if elements:
+                        content_text = ' '.join([elem.get_text(strip=True) for elem in elements])
+                        if len(content_text) > 100:  # 确保内容足够长
+                            break
+                
+                # 如果没有找到特定内容区域，尝试获取body内容
+                if not content_text or len(content_text) < 100:
+                    body = soup.find('body')
+                    if body:
+                        content_text = body.get_text(strip=True)
+                
+                # 清理文本
+                if content_text:
+                    # 移除多余的空白字符
+                    content_text = re.sub(r'\s+', ' ', content_text)
+                    # 限制长度（避免过长的内容）
+                    if len(content_text) > 5000:
+                        content_text = content_text[:5000] + "..."
+                    return content_text
+                else:
+                    return "❌ 无法提取网页内容"
+                    
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries - 1:
+                    time.sleep(1)  # 等待1秒后重试
+                    continue
+                else:
+                    return f"❌ 网络请求失败: {str(e)}"
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                else:
+                    return f"❌ 解析失败: {str(e)}"
+                    
+    except Exception as e:
+        return f"❌ 抓取失败: {str(e)}"
+
+def analyze_news_with_openai(news_results, keywords, companies):
+    """使用OpenAI分析新闻搜索结果（第二步：格式化输出）"""
+    try:
+        # 为每个新闻条目抓取完整内容
+        enhanced_news_results = []
+        
+        for i, news_item in enumerate(news_results[:6]):  # 只处理前6条新闻
+            enhanced_item = news_item.copy()
+            
+            # 获取新闻链接
+            news_url = news_item.get('link', '')
+            
+            if news_url and validate_url(news_url)[0]:
+                # 显示抓取进度
+                if hasattr(st, 'session_state') and hasattr(st.session_state, 'language'):
+                    current_lang = st.session_state.language
+                    progress_text = f"🔍 正在抓取第{i+1}条新闻内容..." if current_lang == "zh" else f"🔍 Scraping content for news item {i+1}..."
+                    if hasattr(st, 'info'):
+                        st.info(progress_text)
+                
+                # 抓取网页内容
+                full_text = scrape_web_content(news_url)
+                enhanced_item['full_text'] = full_text
+            else:
+                enhanced_item['full_text'] = "❌ 无效链接或无法访问"
+            
+            enhanced_news_results.append(enhanced_item)
+        
+        # 构建分析prompt
+        current_lang = st.session_state.language if hasattr(st, 'session_state') and 'language' in st.session_state else "zh"
+        
+        if current_lang == "zh":
+            analysis_prompt = f"""你是一个专业的新闻分析师。请根据以下百度新闻搜索结果，为每条新闻提供详细的分析和格式化输出。
+
+重要：请确保所有输出内容都是中文，包括标题、摘要、全文等所有字段。
+
+搜索关键词：{', '.join(keywords) if keywords else '无'}
+搜索公司：{', '.join(companies) if companies else '无'}
+
+请为每条新闻提供以下7个字段的详细分析：
+
+1. **Title（标题）**：新闻的完整标题（保持原标题，如果是英文标题则翻译为中文）
+2. **Relevance（相关性）**：相关性评分（0-1，1为最相关），基于与关键词和公司的匹配度
+3. **Source（来源）**：新闻来源（必须来自中国媒体）
+4. **Source Link（来源链接）**：原始新闻文章的URL链接
+5. **Publish Time（发布时间）**：具体发布时间（年-月-日 时:分）
+6. **Summary（摘要）**：新闻的简要概述（100-200字，必须用中文）
+7. **Full Text（全文）**：新闻的完整内容（如果抓取成功，请将抓取到的内容翻译为中文；如果抓取失败，请基于标题和摘要生成合理的中文内容）
+
+新闻搜索结果（包含抓取的完整内容）：
+{json.dumps(enhanced_news_results, ensure_ascii=False, indent=2)}
+
+请严格按照上述7个字段格式输出，每个字段单独占一行，字段之间用空行分隔。确保所有字段标签使用红色加粗格式：<span style="color: #ff0000; font-weight: bold;">**字段名**</span>
+
+特别注意：所有输出内容必须是中文，包括标题翻译、摘要和全文内容。"""
+        else:
+            analysis_prompt = f"""You are a professional news analyst. Please analyze the following Baidu news search results and provide detailed analysis for each news item.
+
+IMPORTANT: Please ensure ALL output content is in English, including titles, summaries, full text, and all other fields.
+
+Search Keywords: {', '.join(keywords) if keywords else 'None'}
+Search Companies: {', '.join(companies) if companies else 'None'}
+
+Please provide detailed analysis for each news item with the following 7 fields:
+
+1. **Title**: Complete news title (translate Chinese titles to English if necessary)
+2. **Relevance**: Relevance score (0-1, 1 being most relevant), based on match with keywords and companies
+3. **Source**: News source (must be from Chinese media, keep original Chinese name)
+4. **Source Link**: URL link to the original news article
+5. **Publish Time**: Specific publication time (YYYY-MM-DD HH:MM)
+6. **Summary**: Brief overview (100-200 words, must be in English)
+7. **Full Text**: Complete news content (if scraping successful, translate the scraped content to English; if scraping failed, generate reasonable English content based on title and snippet)
+
+News search results (with scraped full content):
+{json.dumps(enhanced_news_results, ensure_ascii=False, indent=2)}
+
+Please strictly follow the above 7-field format, with each field on a separate line and blank lines between fields. Ensure all field labels use red bold format: <span style="color: #ff0000; font-weight: bold;">**Field Name**</span>
+
+SPECIAL NOTE: All output content must be in English, including title translation, summary, and full text content."""
+        
+        # 调用OpenAI API进行分析
+        analysis_result = call_openai_api(analysis_prompt)
+        return analysis_result
+        
+    except Exception as e:
+        # 如果OpenAI分析失败，回退到原始格式化方法
+        return format_news_results(news_results, keywords, companies)
+
+def format_news_results(news_results, keywords, companies):
+    """格式化新闻搜索结果"""
+    formatted_results = []
+    
+    # 获取当前语言设置
+    current_lang = st.session_state.language if hasattr(st, 'session_state') and hasattr(st.session_state, 'language') else "zh"
+    
+    for i, news in enumerate(news_results[:5]):  # 限制显示前5条新闻
+        # 计算相关性评分
+        relevance_score = calculate_relevance_score(news, keywords, companies)
+        
+        # 根据语言设置格式化单条新闻
+        if current_lang == "zh":
+            news_item = f"""<span style="color: #ff0000; font-weight: bold;">**Title（标题）**</span>: {news.get('title', 'N/A')}
+
+<span style="color: #ff0000; font-weight: bold;">**Relevance（相关性）**</span>: {relevance_score:.2f}
+
+<span style="color: #ff0000; font-weight: bold;">**Source（来源）**</span>: {news.get('source', 'N/A')}
+
+<span style="color: #ff0000; font-weight: bold;">**Source Link（来源链接）**</span>: {news.get('link', 'N/A')}
+
+<span style="color: #ff0000; font-weight: bold;">**Publish Time（发布时间）**</span>: {news.get('date', 'N/A')}
+
+<span style="color: #ff0000; font-weight: bold;">**Summary（摘要）**</span>: {news.get('snippet', 'N/A')}
+
+<span style="color: #ff0000; font-weight: bold;">**Full Text（全文）**</span>: {news.get('snippet', 'N/A')}
+
+---
+"""
+        else:
+            news_item = f"""<span style="color: #ff0000; font-weight: bold;">**Title**</span>: {news.get('title', 'N/A')}
+
+<span style="color: #ff0000; font-weight: bold;">**Relevance**</span>: {relevance_score:.2f}
+
+<span style="color: #ff0000; font-weight: bold;">**Source**</span>: {news.get('source', 'N/A')}
+
+<span style="color: #ff0000; font-weight: bold;">**Source Link**</span>: {news.get('link', 'N/A')}
+
+<span style="color: #ff0000; font-weight: bold;">**Publish Time**</span>: {news.get('date', 'N/A')}
+
+<span style="color: #ff0000; font-weight: bold;">**Summary**</span>: {news.get('snippet', 'N/A')}
+
+<span style="color: #ff0000; font-weight: bold;">**Full Text**</span>: {news.get('snippet', 'N/A')}
+
+---
+"""
+        formatted_results.append(news_item)
+    
+    return "\n".join(formatted_results)
+
+def calculate_relevance_score(news, keywords, companies):
+    """计算新闻相关性评分"""
+    score = 0.0
+    title = news.get('title', '').lower()
+    snippet = news.get('snippet', '').lower()
+    content = f"{title} {snippet}"
+    
+    # 关键词匹配
+    if keywords:
+        keyword_matches = sum(1 for keyword in keywords if keyword.lower() in content)
+        score += (keyword_matches / len(keywords)) * 0.6
+    
+    # 公司匹配
+    if companies:
+        company_matches = 0
+        current_companies_mapping = COMPANIES_MAPPING[st.session_state.language]
+        for company in companies:
+            if company in current_companies_mapping:
+                company_name = current_companies_mapping[company].lower()
+                if company_name in content:
+                    company_matches += 1
+            else:
+                if company.lower() in content:
+                    company_matches += 1
+        score += (company_matches / len(companies)) * 0.4
+    
+    # 确保评分在0-1之间
+    return min(max(score, 0.1), 1.0)
+
+def extract_search_terms_from_prompt(prompt):
+    """从自定义prompt中提取关键词和公司信息"""
+    keywords = []
+    companies = []
+    
+    # 获取当前语言的关键词和公司列表
+    current_keywords = KEYWORDS_MAPPING[st.session_state.language]
+    current_companies = list(COMPANIES_MAPPING[st.session_state.language].keys())
+    
+    prompt_lower = prompt.lower()
+    
+    # 提取关键词
+    for keyword in current_keywords:
+        if keyword.lower() in prompt_lower:
+            keywords.append(keyword)
+    
+    # 提取公司
+    for company in current_companies:
+        if company.lower() in prompt_lower:
+            companies.append(company)
+    
+    # 如果没有找到预定义的关键词或公司，使用一些通用关键词
+    if not keywords and not companies:
+        keywords = ["关键矿产", "矿业"] if st.session_state.language == "zh" else ["critical minerals", "mining"]
+    
+    return keywords, companies
+
+def call_openai_api(prompt, model="gpt-4o"):
+    """调用OpenAI API (用于语言转换和内容分析)"""
     try:
         # 初始化OpenAI客户端
         client = OpenAI(
-            api_key=KIMI_API_KEY,
-            base_url=KIMI_BASE_URL,
+            api_key=OPENAI_API_KEY,
         )
         
-        # 获取当前日期，用于系统提示
-        current_date = datetime.now()
-        if st.session_state.language == "zh":
-            current_date_str = current_date.strftime('%Y年%m月%d日')
-        else:
-            current_date_str = current_date.strftime('%Y-%m-%d')
-        
-        # 根据语言设置系统提示
-        if st.session_state.language == "zh":
-            system_prompt = f"""你是 Kimi，由 Moonshot AI 提供的人工智能助手，你更擅长中文和英文的对话。你会为用户提供安全，有帮助，准确的回答。同时，你会拒绝一切涉及恐怖主义，种族歧视，黄色暴力等问题的回答。Moonshot AI 为专有名词，不可翻译成其他语言。
-
-🎯 新闻搜索专家模式：
-你是一个专业的新闻搜索和分析专家，擅长：
-- 根据关键词和公司进行精准新闻搜索
-- 分析新闻的相关性和重要性
-- 提供详细的新闻摘要和内容
-- 智能处理时间范围和搜索策略
-
-⚠️ 重要时间要求：
-- 当前日期是 {current_date_str}
-- 绝对不要使用2024年、2023年或更早的日期作为"当前时间"
-- 请尽可能找到指定时间范围内的真实新闻
-
-⚠️ 重要输出格式要求：
-每条新闻必须严格按照以下7项固定格式输出，不能缺少任何一项：
-
-1. **Title（标题）**：新闻的完整标题
-2. **Relevance（相关性）**：相关性评分（0-1，1为最相关）
-3. **Source（来源）**：新闻来源必须来自中国（中国媒体、网站、机构等）
-4. **Source Link（来源链接）**：原始新闻文章的URL链接（必须是真实可访问的链接）
-5. **Publish Time（发布时间）**：新闻发布的具体时间（年-月-日 时:分）
-6. **Summary（摘要）**：新闻的简要概述（100-200字）
-7. **Full Text（全文）**：新闻的完整内容
-
-⚠️ 字段标签显示要求：
-所有字段标签（Title、Relevance、Source、Source Link、Publish Time、Summary、Full Text）必须使用红色加粗字体显示，格式为：<span style="color: #ff0000; font-weight: bold;">**字段名** ： </span>
-
-⚠️ Source Link 特殊要求：
-- 必须提供真实可访问的新闻链接
-- 链接格式应该是标准的HTTP/HTTPS URL
-- 如果无法提供真实链接，请使用"链接暂不可用"或"Link not available"
-- 避免生成虚构的URL或示例链接
-
-⚠️ 格式要求：
-每个字段必须单独占一行，字段之间必须有空行分隔，确保格式清晰易读。
-
-搜索策略：
-- 优先搜索指定时间范围内的新闻
-- 如果指定时间范围内新闻较少，可以适当扩大搜索范围
-- **重要**：使用"或"逻辑搜索，即新闻内容与任一关键词或任一公司相关即可
-- 确保新闻内容与关键词或公司高度相关
-- **重要**：所有新闻来源必须来自中国（中国媒体、网站、机构等）
-- 如果确实没有找到相关新闻，请说明"在指定时间范围内未找到相关新闻"
-
-⚠️ 链接质量要求：
-- 优先提供来自知名中国媒体的真实新闻链接
-- 确保链接格式正确且可访问
-- 如果无法验证链接真实性，请明确标注"链接需要验证"
-
-请用中文回答，严格按照上述7项固定格式输出每条新闻。"""
-        else:
-            system_prompt = f"""You are Kimi, an AI assistant provided by Moonshot AI. You are better at Chinese and English conversations. You will provide users with safe, helpful, and accurate answers. At the same time, you will refuse to answer any questions involving terrorism, racial discrimination, pornography, violence, etc. Moonshot AI is a proper noun and cannot be translated into other languages.
-
-🎯 News Search Expert Mode:
-You are a professional news search and analysis expert, skilled in:
-- Precise news search based on keywords and companies
-- Analyzing news relevance and importance
-- Providing detailed news summaries and content
-- Intelligently handling time ranges and search strategies
-
-⚠️ Important Time Requirements:
-- Current date is {current_date_str}
-- Absolutely do not use dates from 2024, 2023, or earlier as "current time"
-- Please try to find real news within the specified time range
-
-⚠️ Important Output Format Requirements:
-Each news item must strictly follow the following 7 fixed format items, without missing any:
-
-1. **Title**: Complete news title
-2. **Relevance**: Relevance score (0-1, 1 being most relevant)
-3. **Source**: News source must be from China (Chinese media, websites, institutions, etc.)
-4. **Source Link**: URL link to the original news article (must be real and accessible, format like: https://www.example.com/news/2024/01/01/article.html)
-5. **Publish Time**: Specific publication time (YYYY-MM-DD HH:MM)
-6. **Summary**: Brief overview (100-200 words)
-7. **Full Text**: Complete news content
-
-⚠️ Field Label Display Requirements:
-All field labels (Title, Relevance, Source, Source Link, Publish Time, Summary, Full Text) must use red bold font, formatted as: <span style="color: #ff0000; font-weight: bold;">**Field Name** ：</span>
-
-⚠️ Source Link Special Requirements:
-- Must provide real and accessible news links
-- Link format should be standard HTTP/HTTPS URL
-- If unable to provide real links, use "Link not available" or "链接暂不可用"
-- Avoid generating fictional URLs or example links
-
-⚠️ Format Requirements:
-Each field must be on a separate line, with blank lines between fields to ensure clear and readable formatting.
-
-Search Strategy:
-- Prioritize news within the specified time range
-- If there are fewer news items in the specified time range, you can appropriately expand the search scope
-- **Important**: Use "OR" logic for search, meaning news content is relevant if it matches ANY keyword OR ANY company
-- Ensure news content is highly relevant to keywords or companies
-- **Important**: All news sources must be from China (Chinese media, websites, institutions, etc.)
-- If no relevant news is found, please state "No relevant news found in the specified time range"
-
-⚠️ Link Quality Requirements:
-- Prioritize providing real news links from well-known Chinese media
-- Ensure link format is correct and accessible
-- If unable to verify link authenticity, clearly mark as "Link needs verification"
-
-Please answer in English, strictly following the above 7 fixed format items for each news item."""
-        
-        # 调用API
         completion = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.8,
-            max_tokens=10000
+            temperature=0.3,
+            max_tokens=4096,
+            stream=False
         )
         
         return completion.choices[0].message.content
@@ -631,9 +910,9 @@ Please answer in English, strictly following the above 7 fixed format items for 
     except Exception as e:
         error_msg = str(e)
         if "401" in error_msg or "unauthorized" in error_msg.lower():
-            return "❌ API调用失败: 您的API密钥已过期或无效，请检查API密钥设置。"
+            return "❌ API调用失败: 您的OpenAI API密钥已过期或无效，请检查API密钥设置。"
         elif "quota" in error_msg.lower() or "rate limit" in error_msg.lower():
-            return "❌ API调用失败: 已达到API调用配额限制，请稍后再试。"
+            return "❌ API调用失败: 已达到OpenAI API调用配额限制，请稍后再试。"
         else:
             return f"❌ API调用失败: {error_msg}"
 
@@ -646,7 +925,7 @@ def main():
     
     with tab1:
         st.header(lang["tab1_title"])
-        st.markdown("Please select filtering criteria, the system will call Kimi K2 model to analyze related news" if st.session_state.language == "en" else "请选择筛选条件，系统将调用Kimi K2模型分析相关新闻")
+        st.markdown("Please select filtering criteria, the system will: 1) Search Baidu News via SerpApi, 2) Format output with OpenAI" if st.session_state.language == "en" else "请选择筛选条件，系统将：1）通过SerpApi搜索百度新闻，2）使用OpenAI进行格式化输出")
         st.markdown('<div style="font-size: 16px;">💡 Search Tip: You can choose keywords, companies, or both, combined with time range for flexible search</div>' if st.session_state.language == "en" else '<div style="font-size: 16px;">💡 搜索提示：您可以选择关键词、公司或两者都选择，配合时间范围进行灵活搜索</div>', unsafe_allow_html=True)
         
         # 创建三列布局
@@ -658,8 +937,8 @@ def main():
             localized_options = get_localized_options()
             current_keywords = localized_options["keywords"]
             
-            # 默认选择第一个关键词
-            default_keywords = [current_keywords[0]] if current_keywords else []
+            # 默认选择前5个关键词
+            default_keywords = current_keywords[:5] if len(current_keywords) >= 5 else current_keywords
             selected_keywords = st.multiselect(
                 "Select keywords (multiple choice):" if st.session_state.language == "en" else "选择关键词（可多选，可选）:",
                 options=current_keywords,
@@ -764,42 +1043,51 @@ def main():
                     with st.expander(lang["generated_prompt"], expanded=False):
                         st.markdown(f'<div style="font-size: 18px;">{news_prompt}</div>', unsafe_allow_html=True)
                     
-                    # 第一步：调用Kimi API获取新闻内容
-                    st.info("🔍 第一步：正在搜索新闻内容..." if st.session_state.language == "zh" else "🔍 Step 1: Searching for news content...")
-                    news_result = call_kimi_api(news_prompt)
-                    
-                    # 第二步：根据UI语言要求进行语言转换
-                    if news_result and not news_result.startswith("❌"):
-                        st.info("🔄 第二步：正在根据界面语言要求转换输出语言..." if st.session_state.language == "zh" else "🔄 Step 2: Converting output language according to UI language setting...")
+                    # 第一步：使用SerpApi搜索百度新闻
+                    st.info("🔍 第一步：正在使用SerpApi搜索百度新闻..." if st.session_state.language == "zh" else "🔍 Step 1: Searching Baidu News with SerpApi...")
+                    try:
+                        news_results = search_baidu_news(selected_keywords, selected_companies, time_option, custom_start_date, custom_end_date)
                         
-                        # 生成语言转换Prompt
-                        language_prompt = generate_language_conversion_prompt(news_result, st.session_state.language)
+                        if news_results:
+                            # 第二步：使用OpenAI进行格式化输出
+                            st.info("🤖 第二步：正在使用OpenAI进行格式化输出..." if st.session_state.language == "zh" else "🤖 Step 2: Formatting output with OpenAI...")
+                            final_result = analyze_news_with_openai(news_results, selected_keywords, selected_companies)
+                            
+                            # 显示分析结果
+                            st.subheader(lang["analysis_results"])
+                            st.markdown(f'<div style="font-size: 18px;">{final_result}</div>', unsafe_allow_html=True)
+                            
+                            # 保存结果到session state
+                            st.session_state.last_news_result = final_result
+                            st.session_state.last_prompt = news_prompt
+                            
+                            # 添加到历史记录
+                            add_to_history(selected_keywords, selected_companies, time_option, final_result, news_prompt)
+                        else:
+                            # 如果未找到新闻
+                            error_msg = "❌ 未找到相关新闻，请尝试调整搜索条件或时间范围。" if st.session_state.language == "zh" else "❌ No relevant news found, please try adjusting search conditions or time range."
+                            st.subheader(lang["analysis_results"])
+                            st.markdown(f'<div style="font-size: 18px;">{error_msg}</div>', unsafe_allow_html=True)
+                            
+                            # 保存结果到session state
+                            st.session_state.last_news_result = error_msg
+                            st.session_state.last_prompt = news_prompt
                         
-                        # 调用Kimi API进行语言转换
-                        final_result = call_kimi_api(language_prompt)
-                        
-                        # 显示最终结果
+                            # 添加到历史记录
+                            add_to_history(selected_keywords, selected_companies, time_option, error_msg, news_prompt)
+                            
+                    except Exception as e:
+                        # 如果搜索失败
+                        error_msg = f"❌ 搜索失败: {str(e)}"
                         st.subheader(lang["analysis_results"])
-                        st.markdown(f'<div style="font-size: 18px;">{final_result}</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div style="font-size: 18px;">{error_msg}</div>', unsafe_allow_html=True)
                         
                         # 保存结果到session state
-                        st.session_state.last_news_result = final_result
+                        st.session_state.last_news_result = error_msg
                         st.session_state.last_prompt = news_prompt
-                        st.session_state.last_language_prompt = language_prompt
                         
                         # 添加到历史记录
-                        add_to_history(selected_keywords, selected_companies, time_option, final_result, news_prompt)
-                    else:
-                        # 如果第一步失败，直接显示错误
-                        st.subheader(lang["analysis_results"])
-                        st.markdown(f'<div style="font-size: 18px;">{news_result}</div>', unsafe_allow_html=True)
-                        
-                        # 保存结果到session state
-                        st.session_state.last_news_result = news_result
-                        st.session_state.last_prompt = news_prompt
-                        
-                        # 添加到历史记录（即使失败也记录）
-                        add_to_history(selected_keywords, selected_companies, time_option, news_result, news_prompt)
+                        add_to_history(selected_keywords, selected_companies, time_option, error_msg, news_prompt)
         
         # 显示上次分析结果
         if 'last_news_result' in st.session_state:
@@ -810,7 +1098,7 @@ def main():
     
     with tab2:
         st.header(lang["tab2_title"])
-        st.markdown("Input your custom prompt, the system will call Kimi K2 model for analysis" if st.session_state.language == "en" else "输入您的自定义Prompt，系统将调用Kimi K2模型进行分析")
+        st.markdown("Input your custom prompt, the system will: 1) Search Baidu News via SerpApi, 2) Format output with OpenAI" if st.session_state.language == "en" else "输入您的自定义Prompt，系统将：1）通过SerpApi搜索百度新闻，2）使用OpenAI进行格式化输出")
         
         # 示例Prompt选择
         st.subheader(lang["example_prompts"])
@@ -855,9 +1143,9 @@ def main():
         # 模型选择
         model_option = st.selectbox(
             lang["model_selection"],
-            options=["kimi-k2-turbo-preview"],
+            options=["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"],
             index=0,
-            help=lang["help_text"]
+            help="Select OpenAI model version" if st.session_state.language == "en" else "选择OpenAI模型版本"
         )
         
         # 分析按钮
@@ -866,35 +1154,44 @@ def main():
                 st.markdown(f'<div style="font-size: 16px; color: #ff4b4b;">{lang["error_no_prompt"]}</div>', unsafe_allow_html=True)
             else:
                 with st.spinner(lang["analyzing"]):
-                    # 第一步：调用Kimi API获取分析结果
-                    st.info(lang["step1_analyzing"])
-                    initial_result = call_kimi_api(custom_prompt, model_option)
+                    # 第一步：使用SerpApi搜索百度新闻
+                    st.info("🔍 第一步：正在使用SerpApi搜索百度新闻..." if st.session_state.language == "zh" else "🔍 Step 1: Searching Baidu News with SerpApi...")
+                    # 从自定义prompt中提取关键词和公司信息进行搜索
+                    extracted_keywords, extracted_companies = extract_search_terms_from_prompt(custom_prompt)
                     
-                    # 第二步：根据UI语言要求进行语言转换
-                    if initial_result and not initial_result.startswith("❌"):
-                        st.info(lang["step2_converting"])
+                    try:
+                        news_results = search_baidu_news(extracted_keywords, extracted_companies, "2_weeks")
                         
-                        # 生成语言转换Prompt
-                        language_prompt = generate_language_conversion_prompt(initial_result, st.session_state.language)
-                        
-                        # 调用Kimi API进行语言转换
-                        final_result = call_kimi_api(language_prompt, model_option)
-                        
-                        # 显示最终结果
+                        if news_results:
+                            # 第二步：使用OpenAI进行格式化输出
+                            st.info("🤖 第二步：正在使用OpenAI进行格式化输出..." if st.session_state.language == "zh" else "🤖 Step 2: Formatting output with OpenAI...")
+                            final_result = analyze_news_with_openai(news_results, extracted_keywords, extracted_companies)
+                            
+                            # 显示分析结果
+                            st.subheader(lang["analysis_results"])
+                            st.markdown(f'<div style="font-size: 18px;">{final_result}</div>', unsafe_allow_html=True)
+                            
+                            # 保存结果到session state
+                            st.session_state.last_custom_result = final_result
+                            st.session_state.last_custom_prompt = custom_prompt
+                        else:
+                            # 如果未找到新闻
+                            error_msg = "❌ 未找到相关新闻，请尝试调整搜索条件或时间范围。" if st.session_state.language == "zh" else "❌ No relevant news found, please try adjusting search conditions or time range."
+                            st.subheader(lang["analysis_results"])
+                            st.markdown(f'<div style="font-size: 18px;">{error_msg}</div>', unsafe_allow_html=True)
+                            
+                            # 保存结果到session state
+                            st.session_state.last_custom_result = error_msg
+                            st.session_state.last_custom_prompt = custom_prompt
+                            
+                    except Exception as e:
+                        # 如果搜索失败
+                        error_msg = f"❌ 搜索失败: {str(e)}"
                         st.subheader(lang["analysis_results"])
-                        st.markdown(f'<div style="font-size: 18px;">{final_result}</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div style="font-size: 18px;">{error_msg}</div>', unsafe_allow_html=True)
                         
                         # 保存结果到session state
-                        st.session_state.last_custom_result = final_result
-                        st.session_state.last_custom_prompt = custom_prompt
-                        st.session_state.last_custom_language_prompt = language_prompt
-                    else:
-                        # 如果第一步失败，直接显示错误
-                        st.subheader(lang["analysis_results"])
-                        st.markdown(f'<div style="font-size: 18px;">{initial_result}</div>', unsafe_allow_html=True)
-                        
-                        # 保存结果到session state
-                        st.session_state.last_custom_result = initial_result
+                        st.session_state.last_custom_result = error_msg
                         st.session_state.last_custom_prompt = custom_prompt
         
         # 显示上次分析结果
