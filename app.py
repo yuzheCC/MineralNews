@@ -368,7 +368,7 @@ def get_localized_options():
 SERPAPI_API_KEY = "fa36203c180ccb3c6b40e432168e491c92ac4c74b53aeac9068a5e61bbf77f05"  # 请替换为您的SerpApi密钥
 
 # OpenAI API 配置
-OPENAI_API_KEY = "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"
+OPENAI_API_KEY = "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"
 
 # 预定义数据
 KEYWORDS = [
