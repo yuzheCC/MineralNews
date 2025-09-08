@@ -364,11 +364,16 @@ def get_localized_options():
         "time_options": LANGUAGES[current_lang]["time_options"]
     }
 
-# SerpApi 配置
-SERPAPI_API_KEY = "fa36203c180ccb3c6b40e432168e491c92ac4c74b53aeac9068a5e61bbf77f05"  # 请替换为您的SerpApi密钥
-
-# OpenAI API 配置
-OPENAI_API_KEY = "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"
+# API 配置 - 从 secrets.toml 文件读取
+try:
+    SERPAPI_API_KEY = st.secrets["SERPAPI_API_KEY"]
+    OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+except KeyError as e:
+    st.error(f"❌ 配置错误: 在 .streamlit/secrets.toml 文件中缺少 API 密钥: {e}")
+    st.stop()
+except Exception as e:
+    st.error(f"❌ 读取配置文件失败: {e}")
+    st.stop()
 
 # 预定义数据
 KEYWORDS = [
@@ -693,6 +698,21 @@ def scrape_web_content(url, max_retries=3):
     except Exception as e:
         return f"❌ 抓取失败: {str(e)}"
 
+def fix_html_rendering(content):
+    """修复HTML渲染问题，确保HTML标签被正确显示"""
+    import html
+    
+    # 如果内容被HTML转义了，先解码
+    if '&lt;' in content or '&gt;' in content or '&amp;' in content:
+        content = html.unescape(content)
+    
+    # 确保span标签格式正确
+    content = content.replace('&lt;span', '<span')
+    content = content.replace('&lt;/span&gt;', '</span>')
+    content = content.replace('&quot;', '"')
+    
+    return content
+
 def analyze_news_with_openai(news_results, keywords, companies):
     """使用OpenAI分析新闻搜索结果（第二步：格式化输出）"""
     try:
@@ -727,54 +747,94 @@ def analyze_news_with_openai(news_results, keywords, companies):
         if current_lang == "zh":
             analysis_prompt = f"""你是一个专业的新闻分析师。请根据以下百度新闻搜索结果，为每条新闻提供详细的分析和格式化输出。
 
-重要：请确保所有输出内容都是中文，包括标题、摘要、全文等所有字段。
+重要说明：
+1. 请确保所有输出内容都是中文，包括标题、摘要、全文等所有字段
+2. 请直接输出HTML格式，不要转义HTML标签
+3. 使用以下HTML格式来标记字段标题：<span style="color: #ff0000; font-weight: bold;">**字段名**</span>
 
 搜索关键词：{', '.join(keywords) if keywords else '无'}
 搜索公司：{', '.join(companies) if companies else '无'}
 
 请为每条新闻提供以下7个字段的详细分析：
 
-1. **Title（标题）**：新闻的完整标题（保持原标题，如果是英文标题则翻译为中文）
-2. **Relevance（相关性）**：相关性评分（0-1，1为最相关），基于与关键词和公司的匹配度
-3. **Source（来源）**：新闻来源（必须来自中国媒体）
-4. **Source Link（来源链接）**：原始新闻文章的URL链接
-5. **Publish Time（发布时间）**：具体发布时间（年-月-日 时:分）
-6. **Summary（摘要）**：新闻的简要概述（100-200字，必须用中文）
-7. **Full Text（全文）**：新闻的完整内容（如果抓取成功，请将抓取到的内容翻译为中文；如果抓取失败，请基于标题和摘要生成合理的中文内容）
+1. 标题：新闻的完整标题（保持原标题，如果是英文标题则翻译为中文）
+2. 相关性：相关性评分（0-1，1为最相关），基于与关键词和公司的匹配度
+3. 来源：新闻来源（必须来自中国媒体）
+4. 来源链接：原始新闻文章的URL链接
+5. 发布时间：具体发布时间（年-月-日 时:分）
+6. 摘要：新闻的简要概述（100-200字，必须用中文）
+7. 全文：新闻的完整内容（如果抓取成功，请将抓取到的内容翻译为中文；如果抓取失败，请基于标题和摘要生成合理的中文内容）
 
 新闻搜索结果（包含抓取的完整内容）：
 {json.dumps(enhanced_news_results, ensure_ascii=False, indent=2)}
 
-请严格按照上述7个字段格式输出，每个字段单独占一行，字段之间用空行分隔。确保所有字段标签使用红色加粗格式：<span style="color: #ff0000; font-weight: bold;">**字段名**</span>
+输出格式示例：
+<span style="color: #ff0000; font-weight: bold;">**标题**</span>: [新闻标题]
 
-特别注意：所有输出内容必须是中文，包括标题翻译、摘要和全文内容。"""
+<span style="color: #ff0000; font-weight: bold;">**相关性**</span>: [0-1分值]
+
+<span style="color: #ff0000; font-weight: bold;">**来源**</span>: [新闻来源]
+
+<span style="color: #ff0000; font-weight: bold;">**来源链接**</span>: [URL链接]
+
+<span style="color: #ff0000; font-weight: bold;">**发布时间**</span>: [时间]
+
+<span style="color: #ff0000; font-weight: bold;">**摘要**</span>: [摘要内容]
+
+<span style="color: #ff0000; font-weight: bold;">**全文**</span>: [全文内容]
+
+---
+
+请严格按照上述格式输出，不要转义HTML标签。"""
         else:
             analysis_prompt = f"""You are a professional news analyst. Please analyze the following Baidu news search results and provide detailed analysis for each news item.
 
-IMPORTANT: Please ensure ALL output content is in English, including titles, summaries, full text, and all other fields.
+IMPORTANT Instructions:
+1. Please ensure ALL output content is in English, including titles, summaries, full text, and all other fields
+2. Please output HTML format directly, do NOT escape HTML tags
+3. Use this HTML format for field headers: <span style="color: #ff0000; font-weight: bold;">**Field Name**</span>
 
 Search Keywords: {', '.join(keywords) if keywords else 'None'}
 Search Companies: {', '.join(companies) if companies else 'None'}
 
 Please provide detailed analysis for each news item with the following 7 fields:
 
-1. **Title**: Complete news title (translate Chinese titles to English if necessary)
-2. **Relevance**: Relevance score (0-1, 1 being most relevant), based on match with keywords and companies
-3. **Source**: News source (must be from Chinese media, keep original Chinese name)
-4. **Source Link**: URL link to the original news article
-5. **Publish Time**: Specific publication time (YYYY-MM-DD HH:MM)
-6. **Summary**: Brief overview (100-200 words, must be in English)
-7. **Full Text**: Complete news content (if scraping successful, translate the scraped content to English; if scraping failed, generate reasonable English content based on title and snippet)
+1. Title: Complete news title (translate Chinese titles to English if necessary)
+2. Relevance: Relevance score (0-1, 1 being most relevant), based on match with keywords and companies
+3. Source: News source (must be from Chinese media, keep original Chinese name)
+4. Source Link: URL link to the original news article
+5. Publish Time: Specific publication time (YYYY-MM-DD HH:MM)
+6. Summary: Brief overview (100-200 words, must be in English)
+7. Full Text: Complete news content (if scraping successful, translate the scraped content to English; if scraping failed, generate reasonable English content based on title and snippet)
 
 News search results (with scraped full content):
 {json.dumps(enhanced_news_results, ensure_ascii=False, indent=2)}
 
-Please strictly follow the above 7-field format, with each field on a separate line and blank lines between fields. Ensure all field labels use red bold format: <span style="color: #ff0000; font-weight: bold;">**Field Name**</span>
+Output format example:
+<span style="color: #ff0000; font-weight: bold;">**Title**</span>: [News title]
 
-SPECIAL NOTE: All output content must be in English, including title translation, summary, and full text content."""
+<span style="color: #ff0000; font-weight: bold;">**Relevance**</span>: [0-1 score]
+
+<span style="color: #ff0000; font-weight: bold;">**Source**</span>: [News source]
+
+<span style="color: #ff0000; font-weight: bold;">**Source Link**</span>: [URL link]
+
+<span style="color: #ff0000; font-weight: bold;">**Publish Time**</span>: [Time]
+
+<span style="color: #ff0000; font-weight: bold;">**Summary**</span>: [Summary content]
+
+<span style="color: #ff0000; font-weight: bold;">**Full Text**</span>: [Full text content]
+
+---
+
+Please strictly follow the above format and do NOT escape HTML tags."""
         
         # 调用OpenAI API进行分析
         analysis_result = call_openai_api(analysis_prompt)
+        
+        # 修复HTML渲染问题
+        analysis_result = fix_html_rendering(analysis_result)
+        
         return analysis_result
         
     except Exception as e:
