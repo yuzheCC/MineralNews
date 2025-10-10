@@ -713,35 +713,124 @@ def fix_html_rendering(content):
     
     return content
 
-def analyze_news_with_openai(news_results, keywords, companies):
-    """使用OpenAI分析新闻搜索结果（第二步：格式化输出）"""
-    try:
-        # 为每个新闻条目抓取完整内容
-        enhanced_news_results = []
-        
-        for i, news_item in enumerate(news_results[:6]):  # 只处理前6条新闻
-            enhanced_item = news_item.copy()
-            
-            # 获取新闻链接
-            news_url = news_item.get('link', '')
-            
-            if news_url and validate_url(news_url)[0]:
-                # 显示抓取进度
-                if hasattr(st, 'session_state') and hasattr(st.session_state, 'language'):
-                    current_lang = st.session_state.language
-                    progress_text = f"🔍 正在抓取第{i+1}条新闻内容..." if current_lang == "zh" else f"🔍 Scraping content for news item {i+1}..."
-                    if hasattr(st, 'info'):
-                        st.info(progress_text)
+def normalize_publish_time(publish_time):
+    """将发布时间统一转换为 %Y-%m-%d 格式"""
+    if not publish_time:
+        return None
+    
+    current_date = datetime.now()
+    current_year = current_date.year
+    
+    # 处理"今天"的情况
+    if "今天" in publish_time:
+        return current_date.strftime('%Y-%m-%d')
+    
+    # 处理"昨天"的情况
+    elif "昨天" in publish_time:
+        return (current_date - timedelta(days=1)).strftime('%Y-%m-%d')
+    
+    # 处理"X天前"的情况
+    elif "天前" in publish_time:
+        try:
+            days_ago = int(publish_time.replace("天前", "").strip())
+            target_date = current_date - timedelta(days=days_ago)
+            return target_date.strftime('%Y-%m-%d')
+        except ValueError:
+            return None
+    
+    # 处理"X月X日"格式（如 "9月27日"）
+    elif "月" in publish_time and "日" in publish_time:
+        try:
+            # 提取月份和日期
+            parts = publish_time.replace("月", " ").replace("日", "").split()
+            if len(parts) >= 2:
+                month = int(parts[0])
+                day = int(parts[1])
                 
-                # 抓取网页内容
+                # 创建日期，假设是当前年份
+                target_date = datetime(current_year, month, day)
+                
+                # 如果日期在未来（比如现在是10月，但日期是9月），则认为是去年
+                if target_date > current_date:
+                    target_date = datetime(current_year - 1, month, day)
+                
+                return target_date.strftime('%Y-%m-%d')
+        except (ValueError, IndexError):
+            return None
+    
+    # 处理标准日期格式（如 "2025-10-03 18:51"）
+    else:
+        try:
+            # 尝试解析 "YYYY-MM-DD HH:MM" 格式
+            news_date = datetime.strptime(publish_time.split()[0], '%Y-%m-%d')
+            return news_date.strftime('%Y-%m-%d')
+        except (ValueError, IndexError):
+            # 如果解析失败，尝试直接使用 "YYYY-MM-DD" 格式
+            try:
+                news_date = datetime.strptime(publish_time, '%Y-%m-%d')
+                return news_date.strftime('%Y-%m-%d')
+            except ValueError:
+                return None
+
+def analyze_news_with_openai(news_results, keywords, companies, start_date, end_date):
+    """使用OpenAI分析新闻搜索结果，重新根据时间范围进行筛选处理"""
+    
+    # 将 start_date 和 end_date 转换为 date 对象进行比较
+    if isinstance(start_date, datetime):
+        start_date_obj = start_date.date()
+    else:
+        start_date_obj = start_date
+    
+    if isinstance(end_date, datetime):
+        end_date_obj = end_date.date()
+    else:
+        end_date_obj = end_date
+    
+    # Filter news_results by Publish Time
+    filtered_news = []
+    
+    for news_item in news_results:
+        publish_time = news_item.get('date', '')
+        
+        # 规范化发布时间格式
+        standardized_date = normalize_publish_time(publish_time)
+        
+        if standardized_date:
+            try:
+                news_date = datetime.strptime(standardized_date, '%Y-%m-%d').date()
+                
+                # 使用 date 对象进行比较
+                if start_date_obj <= news_date <= end_date_obj:
+                    filtered_news.append(news_item)
+            except ValueError:
+                continue  # Skip if date cannot be parsed
+
+    # Check if any news collected after filtering
+    if not filtered_news:
+        return ("未找到符合时间范围的新闻" if st.session_state.language == "zh" else "No news found within the time range")
+
+    # Proceed to analyze with OpenAI
+    try:
+        # The rest of the code remains the same, analysis continues...
+        enhanced_news_results = []
+        for i, news_item in enumerate(filtered_news):
+            enhanced_item = news_item.copy()
+            news_url = news_item.get('link', '')
+            if news_url and validate_url(news_url)[0]:
+                if st.session_state.language == "zh":
+                    progress_text = f"🔍 正在抓取第{i+1}条新闻内容..."
+                else:
+                    progress_text = f"🔍 Scraping content for news item {i+1}..."
+                if hasattr(st, 'info'):
+                    st.info(progress_text)
+
                 full_text = scrape_web_content(news_url)
                 enhanced_item['full_text'] = full_text
             else:
                 enhanced_item['full_text'] = "❌ 无效链接或无法访问"
-            
             enhanced_news_results.append(enhanced_item)
-        
-        # 构建分析prompt
+
+        # Rebuild the prompt for language-specific analysis
         current_lang = st.session_state.language if hasattr(st, 'session_state') and 'language' in st.session_state else "zh"
         
         if current_lang == "zh":
@@ -836,9 +925,7 @@ Please strictly follow the above format and do NOT escape HTML tags."""
         analysis_result = fix_html_rendering(analysis_result)
         
         return analysis_result
-        
     except Exception as e:
-        # 如果OpenAI分析失败，回退到原始格式化方法
         return format_news_results(news_results, keywords, companies)
 
 def format_news_results(news_results, keywords, companies):
@@ -1109,9 +1196,31 @@ def main():
                         news_results = search_baidu_news(selected_keywords, selected_companies, time_option, custom_start_date, custom_end_date)
                         
                         if news_results:
+                            # 计算实际的时间范围用于过滤
+                            current_date = datetime.now()
+                            if time_option == "2_weeks":
+                                filter_start_date = current_date - timedelta(weeks=2)
+                                filter_end_date = current_date
+                            elif time_option == "2_days":
+                                filter_start_date = current_date - timedelta(days=2)
+                                filter_end_date = current_date
+                            elif time_option == "custom" and custom_start_date and custom_end_date:
+                                filter_start_date = datetime.combine(custom_start_date, datetime.min.time())
+                                filter_end_date = datetime.combine(custom_end_date, datetime.max.time())
+                            else:
+                                # 默认使用最近2周
+                                filter_start_date = current_date - timedelta(weeks=2)
+                                filter_end_date = current_date
+                            
+                            # 显示时间范围信息
+                            if st.session_state.language == "zh":
+                                st.info(f"📅 过滤时间范围: {filter_start_date.strftime('%Y-%m-%d')} 至 {filter_end_date.strftime('%Y-%m-%d')}")
+                            else:
+                                st.info(f"📅 Filter time range: {filter_start_date.strftime('%Y-%m-%d')} to {filter_end_date.strftime('%Y-%m-%d')}")
+                            
                             # 第二步：使用OpenAI进行格式化输出
                             st.info("🤖 第二步：正在使用OpenAI进行格式化输出..." if st.session_state.language == "zh" else "🤖 Step 2: Formatting output with OpenAI...")
-                            final_result = analyze_news_with_openai(news_results, selected_keywords, selected_companies)
+                            final_result = analyze_news_with_openai(news_results, selected_keywords, selected_companies, filter_start_date, filter_end_date)
                             
                             # 显示分析结果
                             st.subheader(lang["analysis_results"])
@@ -1223,9 +1332,14 @@ def main():
                         news_results = search_baidu_news(extracted_keywords, extracted_companies, "2_weeks")
                         
                         if news_results:
+                            # 计算实际的时间范围用于过滤（默认最近2周）
+                            current_date = datetime.now()
+                            filter_start_date = current_date - timedelta(weeks=2)
+                            filter_end_date = current_date
+                            
                             # 第二步：使用OpenAI进行格式化输出
                             st.info("🤖 第二步：正在使用OpenAI进行格式化输出..." if st.session_state.language == "zh" else "🤖 Step 2: Formatting output with OpenAI...")
-                            final_result = analyze_news_with_openai(news_results, extracted_keywords, extracted_companies)
+                            final_result = analyze_news_with_openai(news_results, extracted_keywords, extracted_companies, filter_start_date, filter_end_date)
                             
                             # 显示分析结果
                             st.subheader(lang["analysis_results"])
