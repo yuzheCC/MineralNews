@@ -1034,6 +1034,251 @@ def extract_search_terms_from_prompt(prompt):
     
     return keywords, companies
 
+def extract_keywords_and_time_with_chatgpt(prompt, model="gpt-4o"):
+    """使用ChatGPT从自定义prompt中提取核心关键词和时间信息"""
+    try:
+        # 构建提取prompt
+        if st.session_state.language == "zh":
+            extraction_prompt = f"""你是一个专业的文本分析助手。请从以下用户输入的prompt中提取核心搜索关键词和时间信息。
+
+用户输入的prompt: "{prompt}"
+
+请按照以下JSON格式返回结果：
+{{
+    "keywords": ["核心关键词"],
+    "time_description": "时间描述",
+    "time_type": "relative|absolute|none",
+    "time_value": "具体时间值",
+    "explanation": "提取过程的简要说明"
+}}
+
+提取规则：
+1. keywords: 只提取最核心的1-2个关键词，必须是关键矿产、矿业、公司、投资、项目等相关的核心词汇
+   - 例如："I searched for Chinese top news on critical minerals in the last 2 days" 只提取 "critical minerals"
+   - 例如："Latest news about Zijin Mining lithium projects" 只提取 "Zijin Mining" 和 "lithium"
+   - 不要提取"news"、"latest"、"top"、"Chinese"等修饰词
+2. time_description: 原始prompt中的时间描述（如"最近2天"、"last 2 days"等）
+3. time_type: "relative"表示相对时间，"absolute"表示绝对时间，"none"表示无时间限制
+4. time_value: 如果是相对时间，提取数字和单位（如"2 days"、"1 week"等）
+5. explanation: 简要说明提取的核心关键词和时间信息
+
+请确保：
+- 只提取最核心的关键词，数量控制在1-2个
+- 关键词要具体且相关，不要包含修饰词
+- 时间信息要准确
+- JSON格式要正确
+- 如果prompt中没有明确的时间信息，time_type设为"none"
+"""
+        else:
+            extraction_prompt = f"""You are a professional text analysis assistant. Please extract core search keywords and time information from the following user prompt.
+
+User prompt: "{prompt}"
+
+Please return the result in the following JSON format:
+{{
+    "keywords": ["core keyword"],
+    "time_description": "time description",
+    "time_type": "relative|absolute|none",
+    "time_value": "specific time value",
+    "explanation": "brief explanation of extraction process"
+}}
+
+Extraction rules:
+1. keywords: Extract only the most core 1-2 keywords related to critical minerals, mining, companies, investments, projects, etc.
+   - Example: "I searched for Chinese top news on critical minerals in the last 2 days" → extract only "critical minerals"
+   - Example: "Latest news about Zijin Mining lithium projects" → extract only "Zijin Mining" and "lithium"
+   - Do NOT extract modifiers like "news", "latest", "top", "Chinese", etc.
+2. time_description: Original time description in the prompt (e.g., "last 2 days", "recent week", etc.)
+3. time_type: "relative" for relative time, "absolute" for absolute time, "none" for no time limit
+4. time_value: If relative time, extract number and unit (e.g., "2 days", "1 week", etc.)
+5. explanation: Brief explanation of extracted core keywords and time information
+
+Please ensure:
+- Extract only the most core keywords, limit to 1-2 keywords
+- Keywords should be specific and relevant, exclude modifiers
+- Time information is accurate
+- JSON format is correct
+- If no clear time information in prompt, set time_type to "none"
+"""
+        
+        # 调用OpenAI API
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        completion = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "user", "content": extraction_prompt}
+            ],
+            temperature=0.1,
+            max_tokens=1000,
+            stream=False
+        )
+        
+        response_text = completion.choices[0].message.content
+        
+        # 解析JSON响应
+        import json
+        try:
+            # 尝试提取JSON部分
+            json_start = response_text.find('{')
+            json_end = response_text.rfind('}') + 1
+            if json_start != -1 and json_end != -1:
+                json_str = response_text[json_start:json_end]
+                result = json.loads(json_str)
+                
+                # 验证必要字段
+                if all(key in result for key in ['keywords', 'time_description', 'time_type', 'time_value', 'explanation']):
+                    return result
+                else:
+                    raise ValueError("Missing required fields in JSON response")
+            else:
+                raise ValueError("No valid JSON found in response")
+                
+        except (json.JSONDecodeError, ValueError) as e:
+            # 如果JSON解析失败，返回默认值
+            return {
+                "keywords": ["关键矿产", "矿业"] if st.session_state.language == "zh" else ["critical minerals", "mining"],
+                "time_description": "无时间限制" if st.session_state.language == "zh" else "no time limit",
+                "time_type": "none",
+                "time_value": "",
+                "explanation": f"JSON解析失败，使用默认关键词: {str(e)}"
+            }
+            
+    except Exception as e:
+        # 如果API调用失败，返回默认值
+        return {
+            "keywords": ["关键矿产", "矿业"] if st.session_state.language == "zh" else ["critical minerals", "mining"],
+            "time_description": "无时间限制" if st.session_state.language == "zh" else "no time limit",
+            "time_type": "none",
+            "time_value": "",
+            "explanation": f"API调用失败，使用默认关键词: {str(e)}"
+        }
+
+def convert_time_to_date_range(time_description, time_type, time_value):
+    """将时间描述转换为具体的日期范围"""
+    try:
+        current_date = datetime.now()
+        
+        if time_type == "none" or not time_value:
+            # 默认使用最近6个月
+            start_date = current_date - timedelta(days=180)  # 约6个月
+            end_date = current_date
+            return start_date, end_date, "最近6个月" if st.session_state.language == "zh" else "last 6 months"
+        
+        elif time_type == "relative":
+            # 处理相对时间
+            time_value_lower = time_value.lower().strip()
+            
+            # 处理天数
+            if "day" in time_value_lower:
+                try:
+                    days = int(''.join(filter(str.isdigit, time_value_lower)))
+                    start_date = current_date - timedelta(days=days)
+                    end_date = current_date
+                    time_desc = f"最近{days}天" if st.session_state.language == "zh" else f"last {days} days"
+                    return start_date, end_date, time_desc
+                except ValueError:
+                    pass
+            
+            # 处理周数
+            elif "week" in time_value_lower:
+                try:
+                    weeks = int(''.join(filter(str.isdigit, time_value_lower)))
+                    start_date = current_date - timedelta(weeks=weeks)
+                    end_date = current_date
+                    time_desc = f"最近{weeks}周" if st.session_state.language == "zh" else f"last {weeks} weeks"
+                    return start_date, end_date, time_desc
+                except ValueError:
+                    pass
+            
+            # 处理月数
+            elif "month" in time_value_lower:
+                try:
+                    months = int(''.join(filter(str.isdigit, time_value_lower)))
+                    start_date = current_date - timedelta(days=months * 30)  # 近似处理
+                    end_date = current_date
+                    time_desc = f"最近{months}个月" if st.session_state.language == "zh" else f"last {months} months"
+                    return start_date, end_date, time_desc
+                except ValueError:
+                    pass
+            
+            # 处理小时
+            elif "hour" in time_value_lower:
+                try:
+                    hours = int(''.join(filter(str.isdigit, time_value_lower)))
+                    start_date = current_date - timedelta(hours=hours)
+                    end_date = current_date
+                    time_desc = f"最近{hours}小时" if st.session_state.language == "zh" else f"last {hours} hours"
+                    return start_date, end_date, time_desc
+                except ValueError:
+                    pass
+        
+        # 如果无法解析，使用默认值
+        start_date = current_date - timedelta(days=180)  # 约6个月
+        end_date = current_date
+        return start_date, end_date, "最近6个月" if st.session_state.language == "zh" else "last 6 months"
+        
+    except Exception as e:
+        # 异常情况下使用默认值
+        current_date = datetime.now()
+        start_date = current_date - timedelta(days=180)  # 约6个月
+        end_date = current_date
+        return start_date, end_date, "最近6个月" if st.session_state.language == "zh" else "last 6 months"
+
+def translate_keywords_to_chinese(keywords, model="gpt-4o"):
+    """将英文关键字翻译成中文"""
+    try:
+        if not keywords:
+            return []
+        
+        # 检查是否包含英文字符
+        has_english = any(any(c.isalpha() and ord(c) < 128 for c in keyword) for keyword in keywords)
+        if not has_english:
+            # 如果没有英文字符，直接返回原关键字
+            return keywords
+        
+        # 构建翻译prompt
+        keywords_str = ", ".join(keywords)
+        translation_prompt = f"""请将以下英文关键词翻译成中文，保持专业术语的准确性：
+
+英文关键词: {keywords_str}
+
+翻译要求：
+1. 保持关键词的专业性和准确性
+2. 如果是矿业、矿产相关的专业术语，请使用标准的中文翻译
+3. 如果是公司名称，请使用该公司的官方中文名称
+4. 只返回翻译后的中文关键词，用逗号分隔
+5. 不要添加任何解释或其他内容
+
+请直接返回翻译结果："""
+        
+        # 调用OpenAI API进行翻译
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        completion = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "user", "content": translation_prompt}
+            ],
+            temperature=0.1,
+            max_tokens=500,
+            stream=False
+        )
+        
+        response_text = completion.choices[0].message.content.strip()
+        
+        # 解析翻译结果
+        translated_keywords = [keyword.strip() for keyword in response_text.split(',') if keyword.strip()]
+        
+        # 如果翻译失败或结果为空，返回原关键字
+        if not translated_keywords:
+            return keywords
+        
+        return translated_keywords
+        
+    except Exception as e:
+        # 如果翻译失败，返回原关键字
+        print(f"Translation failed: {str(e)}")
+        return keywords
+
 def call_openai_api(prompt, model="gpt-4o"):
     """调用OpenAI API (用于语言转换和内容分析)"""
     try:
@@ -1323,23 +1568,70 @@ def main():
                 st.markdown(f'<div style="font-size: 16px; color: #ff4b4b;">{lang["error_no_prompt"]}</div>', unsafe_allow_html=True)
             else:
                 with st.spinner(lang["analyzing"]):
-                    # 第一步：使用SerpApi搜索百度新闻
-                    st.info("🔍 第一步：正在使用SerpApi搜索百度新闻..." if st.session_state.language == "zh" else "🔍 Step 1: Searching Baidu News with SerpApi...")
-                    # 从自定义prompt中提取关键词和公司信息进行搜索
-                    extracted_keywords, extracted_companies = extract_search_terms_from_prompt(custom_prompt)
+                    # 第一步：使用ChatGPT提取关键词和时间信息
+                    st.info("🧠 第一步：正在使用ChatGPT分析Prompt..." if st.session_state.language == "zh" else "🧠 Step 1: Analyzing prompt with ChatGPT...")
                     
                     try:
-                        news_results = search_baidu_news(extracted_keywords, extracted_companies, "2_weeks")
+                        # 使用ChatGPT提取关键词和时间信息
+                        extraction_result = extract_keywords_and_time_with_chatgpt(custom_prompt, model_option)
+                        
+                        # 显示提取结果
+                        st.success("✅ Prompt分析完成！" if st.session_state.language == "zh" else "✅ Prompt analysis completed!")
+                        
+                        # 第三步：翻译关键字为中文
+                        st.info("🔄 第三步：正在翻译关键字为中文..." if st.session_state.language == "zh" else "🔄 Step 3: Translating keywords to Chinese...")
+                        
+                        # 翻译关键字
+                        original_keywords = extraction_result["keywords"]
+                        translated_keywords = translate_keywords_to_chinese(original_keywords, model_option)
+                        
+                        # 显示翻译结果
+                        st.success("✅ 关键字翻译完成！" if st.session_state.language == "zh" else "✅ Keywords translation completed!")
+                        
+                        # 创建三列显示提取的参数
+                        col_extract1, col_extract2, col_extract3 = st.columns(3)
+                        
+                        with col_extract1:
+                            st.markdown("**🔑 原始关键词 / Original Keywords:**")
+                            original_display = ", ".join(original_keywords) if original_keywords else ("无" if st.session_state.language == "zh" else "None")
+                            st.markdown(f'<div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin: 5px 0;">{original_display}</div>', unsafe_allow_html=True)
+                        
+                        with col_extract2:
+                            st.markdown("**🇨🇳 中文关键词 / Chinese Keywords:**")
+                            translated_display = ", ".join(translated_keywords) if translated_keywords else ("无" if st.session_state.language == "zh" else "None")
+                            st.markdown(f'<div style="background-color: #e8f5e8; padding: 10px; border-radius: 5px; margin: 5px 0;">{translated_display}</div>', unsafe_allow_html=True)
+                        
+                        with col_extract3:
+                            st.markdown("**⏰ 时间范围 / Time Range:**")
+                            time_display = extraction_result["time_description"] if extraction_result["time_description"] else ("无时间限制" if st.session_state.language == "zh" else "No time limit")
+                            st.markdown(f'<div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin: 5px 0;">{time_display}</div>', unsafe_allow_html=True)
+                        
+                        # 显示提取说明
+                        with st.expander("📝 提取说明 / Extraction Explanation", expanded=False):
+                            st.markdown(f'<div style="font-size: 14px;">{extraction_result["explanation"]}</div>', unsafe_allow_html=True)
+                        
+                        # 第四步：转换时间为具体日期范围
+                        st.info("📅 第四步：正在转换时间范围..." if st.session_state.language == "zh" else "📅 Step 4: Converting time range...")
+                        
+                        filter_start_date, filter_end_date, time_desc = convert_time_to_date_range(
+                            extraction_result["time_description"],
+                            extraction_result["time_type"],
+                            extraction_result["time_value"]
+                        )
+                        
+                        # 显示具体的时间范围
+                        st.success(f"📅 搜索时间范围: {filter_start_date.strftime('%Y-%m-%d')} 至 {filter_end_date.strftime('%Y-%m-%d')}" if st.session_state.language == "zh" else f"📅 Search time range: {filter_start_date.strftime('%Y-%m-%d')} to {filter_end_date.strftime('%Y-%m-%d')}")
+                        
+                        # 第五步：使用SerpApi搜索百度新闻
+                        st.info("🔍 第五步：正在使用SerpApi搜索百度新闻..." if st.session_state.language == "zh" else "🔍 Step 5: Searching Baidu News with SerpApi...")
+                        
+                        # 使用翻译后的中文关键词进行搜索
+                        news_results = search_baidu_news(translated_keywords, [], "custom", filter_start_date, filter_end_date)
                         
                         if news_results:
-                            # 计算实际的时间范围用于过滤（默认最近2周）
-                            current_date = datetime.now()
-                            filter_start_date = current_date - timedelta(weeks=2)
-                            filter_end_date = current_date
-                            
-                            # 第二步：使用OpenAI进行格式化输出
-                            st.info("🤖 第二步：正在使用OpenAI进行格式化输出..." if st.session_state.language == "zh" else "🤖 Step 2: Formatting output with OpenAI...")
-                            final_result = analyze_news_with_openai(news_results, extracted_keywords, extracted_companies, filter_start_date, filter_end_date)
+                            # 第六步：使用OpenAI进行格式化输出
+                            st.info("🤖 第六步：正在使用OpenAI进行格式化输出..." if st.session_state.language == "zh" else "🤖 Step 6: Formatting output with OpenAI...")
+                            final_result = analyze_news_with_openai(news_results, translated_keywords, [], filter_start_date, filter_end_date)
                             
                             # 显示分析结果
                             st.subheader(lang["analysis_results"])
@@ -1348,6 +1640,13 @@ def main():
                             # 保存结果到session state
                             st.session_state.last_custom_result = final_result
                             st.session_state.last_custom_prompt = custom_prompt
+                            st.session_state.last_extraction_result = extraction_result
+                            st.session_state.last_translated_keywords = translated_keywords
+                            st.session_state.last_time_range = {
+                                "start_date": filter_start_date,
+                                "end_date": filter_end_date,
+                                "description": time_desc
+                            }
                         else:
                             # 如果未找到新闻
                             error_msg = "❌ 未找到相关新闻，请尝试调整搜索条件或时间范围。" if st.session_state.language == "zh" else "❌ No relevant news found, please try adjusting search conditions or time range."
@@ -1357,21 +1656,96 @@ def main():
                             # 保存结果到session state
                             st.session_state.last_custom_result = error_msg
                             st.session_state.last_custom_prompt = custom_prompt
+                            st.session_state.last_extraction_result = extraction_result
+                            st.session_state.last_translated_keywords = translated_keywords
+                            st.session_state.last_time_range = {
+                                "start_date": filter_start_date,
+                                "end_date": filter_end_date,
+                                "description": time_desc
+                            }
                             
                     except Exception as e:
-                        # 如果搜索失败
-                        error_msg = f"❌ 搜索失败: {str(e)}"
-                        st.subheader(lang["analysis_results"])
-                        st.markdown(f'<div style="font-size: 18px;">{error_msg}</div>', unsafe_allow_html=True)
+                        # 如果提取失败，使用传统方法
+                        st.warning("⚠️ ChatGPT提取失败，使用传统方法..." if st.session_state.language == "zh" else "⚠️ ChatGPT extraction failed, using traditional method...")
                         
-                        # 保存结果到session state
-                        st.session_state.last_custom_result = error_msg
-                        st.session_state.last_custom_prompt = custom_prompt
+                        # 使用传统方法提取关键词
+                        extracted_keywords, extracted_companies = extract_search_terms_from_prompt(custom_prompt)
+                        
+                        # 显示提取的关键词
+                        st.markdown("**🔑 提取的关键词 / Extracted Keywords:**")
+                        keywords_display = ", ".join(extracted_keywords) if extracted_keywords else ("无" if st.session_state.language == "zh" else "None")
+                        st.markdown(f'<div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin: 5px 0;">{keywords_display}</div>', unsafe_allow_html=True)
+                        
+                        # 使用默认时间范围
+                        current_date = datetime.now()
+                        filter_start_date = current_date - timedelta(days=180)  # 约6个月
+                        filter_end_date = current_date
+                        
+                        st.markdown("**⏰ 时间范围 / Time Range:**")
+                        st.markdown(f'<div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin: 5px 0;">最近6个月 / Last 6 months</div>', unsafe_allow_html=True)
+                        
+                        try:
+                            news_results = search_baidu_news(extracted_keywords, extracted_companies, "custom", filter_start_date, filter_end_date)
+                            
+                            if news_results:
+                                final_result = analyze_news_with_openai(news_results, extracted_keywords, extracted_companies, filter_start_date, filter_end_date)
+                                
+                                # 显示分析结果
+                                st.subheader(lang["analysis_results"])
+                                st.markdown(f'<div style="font-size: 18px;">{final_result}</div>', unsafe_allow_html=True)
+                                
+                                # 保存结果到session state
+                                st.session_state.last_custom_result = final_result
+                                st.session_state.last_custom_prompt = custom_prompt
+                            else:
+                                error_msg = "❌ 未找到相关新闻，请尝试调整搜索条件或时间范围。" if st.session_state.language == "zh" else "❌ No relevant news found, please try adjusting search conditions or time range."
+                                st.subheader(lang["analysis_results"])
+                                st.markdown(f'<div style="font-size: 18px;">{error_msg}</div>', unsafe_allow_html=True)
+                                
+                                st.session_state.last_custom_result = error_msg
+                                st.session_state.last_custom_prompt = custom_prompt
+                                
+                        except Exception as e2:
+                            # 如果搜索失败
+                            error_msg = f"❌ 搜索失败: {str(e2)}"
+                            st.subheader(lang["analysis_results"])
+                            st.markdown(f'<div style="font-size: 18px;">{error_msg}</div>', unsafe_allow_html=True)
+                            
+                            st.session_state.last_custom_result = error_msg
+                            st.session_state.last_custom_prompt = custom_prompt
         
         # 显示上次分析结果
         if 'last_custom_result' in st.session_state:
             st.markdown("---")
             st.subheader(lang["last_results"])
+            
+            # 显示上次搜索的参数信息
+            if 'last_extraction_result' in st.session_state and 'last_time_range' in st.session_state:
+                st.markdown("**📊 上次搜索参数 / Last Search Parameters:**")
+                
+                col_last1, col_last2, col_last3, col_last4 = st.columns(4)
+                
+                with col_last1:
+                    st.markdown("**🔑 原始关键词 / Original Keywords:**")
+                    last_original_keywords = ", ".join(st.session_state.last_extraction_result["keywords"]) if st.session_state.last_extraction_result["keywords"] else ("无" if st.session_state.language == "zh" else "None")
+                    st.markdown(f'<div style="background-color: #e8f4fd; padding: 8px; border-radius: 5px; font-size: 14px;">{last_original_keywords}</div>', unsafe_allow_html=True)
+                
+                with col_last2:
+                    st.markdown("**🇨🇳 中文关键词 / Chinese Keywords:**")
+                    last_translated_keywords = ", ".join(st.session_state.last_translated_keywords) if 'last_translated_keywords' in st.session_state and st.session_state.last_translated_keywords else ("无" if st.session_state.language == "zh" else "None")
+                    st.markdown(f'<div style="background-color: #e8f5e8; padding: 8px; border-radius: 5px; font-size: 14px;">{last_translated_keywords}</div>', unsafe_allow_html=True)
+                
+                with col_last3:
+                    st.markdown("**⏰ 时间范围 / Time Range:**")
+                    last_time_desc = st.session_state.last_time_range["description"]
+                    st.markdown(f'<div style="background-color: #e8f4fd; padding: 8px; border-radius: 5px; font-size: 14px;">{last_time_desc}</div>', unsafe_allow_html=True)
+                
+                with col_last4:
+                    st.markdown("**📅 具体日期 / Specific Dates:**")
+                    last_start = st.session_state.last_time_range["start_date"].strftime('%Y-%m-%d')
+                    last_end = st.session_state.last_time_range["end_date"].strftime('%Y-%m-%d')
+                    st.markdown(f'<div style="background-color: #e8f4fd; padding: 8px; border-radius: 5px; font-size: 14px;">{last_start} ~ {last_end}</div>', unsafe_allow_html=True)
+            
             with st.expander(lang["view_last_results"], expanded=False):
                 st.markdown(f'<div style="font-size: 18px;">{st.session_state.last_custom_result}</div>', unsafe_allow_html=True)
                 
